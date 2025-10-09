@@ -276,6 +276,7 @@ data
 
 # TypeScript/Node.js specific
 lib/
+dist/
 *.tsbuildinfo
 coverage/
 *.lcov

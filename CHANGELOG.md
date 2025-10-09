@@ -100,7 +100,7 @@ jobs:
 ### Core Services
 
 1. **ValidationService** - Input validation with detailed error messages
-2. **CryptoService** - AES-256-CBC encryption using Node.js crypto module  
+2. **CryptoService** - AES-256-GCM encryption using Node.js crypto module  
 3. **CompressionService** - Tar + Zstd compression with native libraries
 4. **GitService** - Git operations using @actions/exec
 5. **ApiClientService** - HTTP requests using @actions/http-client
@@ -110,7 +110,7 @@ jobs:
 
 ### Security Features
 
-- 🔐 **AES-256-CBC Encryption**: Industry-standard encryption
+- 🔐 **AES-256-GCM Encryption**: Industry-standard encryption
 - 🔑 **PBKDF2 Key Derivation**: Secure password-based key derivation
 - 🛡️ **Input Validation**: Comprehensive validation with clear error messages
 - 🕵️ **Secret Masking**: Automatic masking of sensitive data in logs

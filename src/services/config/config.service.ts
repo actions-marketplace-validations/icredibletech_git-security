@@ -1,5 +1,9 @@
 import { BaseService } from '../base/base-service';
-import { IConfigService, IValidationService, ILogger } from '../base/interfaces';
+import {
+  IConfigService,
+  IValidationService,
+  ILogger,
+} from '../base/interfaces';
 import { ActionInputs, AppConfig } from '@/types/config';
 
 export class ConfigService extends BaseService implements IConfigService {
@@ -18,11 +22,13 @@ export class ConfigService extends BaseService implements IConfigService {
 
   public async validateInputs(inputs: ActionInputs): Promise<void> {
     this.ensureInitialized();
-    
-    this.validationService.validatePassword(inputs.icredible_encryption_password);
+
+    this.validationService.validatePassword(
+      inputs.icredible_encryption_password
+    );
     this.validationService.validateActionType(inputs.action);
     this.validationService.validateOtpMethod(inputs.otp_delivery_method);
-    
+
     if (inputs.action === 'restore') {
       this.validationService.validateRestoreInputs(
         inputs.file_version_id,
@@ -47,7 +53,7 @@ export class ConfigService extends BaseService implements IConfigService {
     return this.getConfig().crypto;
   }
 
-   public getEnpointConfig(): AppConfig['endpoint'] {
+  public getEnpointConfig(): AppConfig['endpoint'] {
     return this.getConfig().endpoint;
   }
 
@@ -57,20 +63,24 @@ export class ConfigService extends BaseService implements IConfigService {
 
   private buildConfig(): AppConfig {
     const inputs = this.getInputsFromEnvironment();
-    
+
     return {
       inputs,
       api: {
         baseUrl: 'https://staging.api.file-security.icredible.com',
-        managementBaseUrl: 'https://staging.management.file-security.icredible.com',
-        timeout: 30000,
+        managementBaseUrl:
+          'https://staging.management.file-security.icredible.com',
+        timeout: 60000, //60 second
         userAgent: 'iCredible-Git-Security/2.0',
       },
       crypto: {
-        algorithm: 'aes-256-cbc',
-        keyDerivation: 'pbkdf2',
-        compressionLevel: 10,
-        hashAlgorithm: 'sha256',
+        algorithm: 'aes-256-gcm',
+        digest: 'sha256',
+        saltLength: 32,
+        ivLength: 12,
+        keyLength: 32,
+        iterations: 600000,
+        authTagLength: 16,
       },
       files: {
         sourceArchiveDir: 'repo-mirror',
@@ -79,7 +89,7 @@ export class ConfigService extends BaseService implements IConfigService {
         encryptedArchiveFile: 'repo-mirror.tar.zst.enc',
       },
       endpoint: {
-        endpointType: 'PC'
+        endpointType: 'PC',
       },
       git: {
         userName: 'iCredible Git Security',
@@ -120,11 +130,16 @@ export class ConfigService extends BaseService implements IConfigService {
     return {
       icredible_activation_code: getInput('icredible_activation_code'),
       icredible_encryption_password: getInput('icredible_encryption_password'),
-      action: getInput('action', false) as 'backup' | 'restore' || 'backup',
+      action: (getInput('action', false) as 'backup' | 'restore') || 'backup',
       file_version_id: getInput('file_version_id', false),
-      icredible_repository_restore_token: getInput('icredible_repository_restore_token', false),
+      icredible_repository_restore_token: getInput(
+        'icredible_repository_restore_token',
+        false
+      ),
       suspend_actions: getBooleanInput('suspend_actions', true),
-      otp_delivery_method: getInput('otp_delivery_method', false) as 'MAIL' | 'AUTHENTICATOR' || 'MAIL',
+      otp_delivery_method:
+        (getInput('otp_delivery_method', false) as 'MAIL' | 'AUTHENTICATOR') ||
+        'MAIL',
     };
   }
 }

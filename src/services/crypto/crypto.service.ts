@@ -3,14 +3,17 @@ import { promisify } from 'util';
 import { BaseService } from '../base/base-service';
 import { ICryptoService, ILogger } from '../base/interfaces';
 import { promises as fs } from 'fs';
+import { CryptoConfig } from '@/types/config';
 
 
 const pbkdf2Async = promisify(pbkdf2);
 
 export class CryptoService extends BaseService implements ICryptoService {
+  private cryptoConfig: CryptoConfig;
 
-  constructor(logger: ILogger) {
+  constructor(logger: ILogger, cryptoConfig: CryptoConfig) {
     super(logger);
+    this.cryptoConfig = cryptoConfig;
   }
 
   protected async onInitialize(): Promise<void> {
@@ -23,75 +26,53 @@ export class CryptoService extends BaseService implements ICryptoService {
     }
   }
 
-  public hashPassword(password: string): string {
-    this.ensureInitialized();
+public async encrypt(inputBuffer: Buffer, password: string): Promise<Buffer> {
+  this.ensureInitialized();
+  try {
+    const salt = randomBytes(this.cryptoConfig.saltLength); 
+    const key = await pbkdf2Async(password, salt, this.cryptoConfig.iterations, this.cryptoConfig.keyLength, this.cryptoConfig.digest);
+    const iv = randomBytes(this.cryptoConfig.ivLength);
     
-    try {
-      const hash = createHash('sha256');
-      hash.update(password, 'utf8');
-      return hash.digest('hex');
-    } catch (error) {
-      this.handleError(error, 'Failed to hash password');
-    }
+    const cipher = createCipheriv(this.cryptoConfig.algorithm, key, iv);
+    const encryptedData = Buffer.concat([cipher.update(inputBuffer), cipher.final()]);
+    
+    const authTag = cipher.getAuthTag();
+    
+    // Include authTag in the output: Salted__ + salt + iv + authTag + encryptedData
+    return Buffer.concat([Buffer.from('Salted__'), salt, iv, authTag, encryptedData]);
+  } catch (error) {
+    this.handleError(error, 'Failed to encrypt data');
   }
-
-  public async encrypt(inputBuffer: Buffer, password: string): Promise<Buffer> {
-    this.ensureInitialized();
-    try {
-      const saltLength = 8;
-      const ivLength = 16;
-      const keyLength = 32;
-      const iterations = 100000;
-      const algorithm = 'aes-256-cbc';
-      const digest = 'sha256';
-
-      const salt = randomBytes(saltLength);
-      const key = await pbkdf2Async(password, salt, iterations, keyLength, digest);
-      const iv = randomBytes(ivLength);
-      const cipher = createCipheriv(algorithm, key, iv);
-      const encryptedData = Buffer.concat([cipher.update(inputBuffer), cipher.final()]);
-      
-     
-      return Buffer.concat([Buffer.from('Salted__'), salt, iv, encryptedData]);
-    } catch (error) {
-      this.handleError(error, 'Failed to encrypt data');
-    }
-  }
-
+}
 
   public async decrypt(encryptedBuffer: Buffer, password: string): Promise<Buffer> {
-    this.ensureInitialized();
-    try {
-      const saltLength = 8;
-      const ivLength = 16;
-      const keyLength = 32;
-      const iterations = 100000;
-      const algorithm = 'aes-256-cbc';
-      const digest = 'sha256';
+  this.ensureInitialized();
+  try {
 
-      const salt = encryptedBuffer.subarray(8, 8 + saltLength);
-      const iv = encryptedBuffer.subarray(8 + saltLength, 8 + saltLength + ivLength);
-      const encryptedData = encryptedBuffer.subarray(8 + saltLength + ivLength);
+    const salt = encryptedBuffer.subarray(8, 8 + this.cryptoConfig.saltLength);
+    const iv = encryptedBuffer.subarray(8 + this.cryptoConfig.saltLength, 8 + this.cryptoConfig.saltLength + this.cryptoConfig.ivLength);
+    const authTag = encryptedBuffer.subarray(8 + this.cryptoConfig.saltLength + this.cryptoConfig.ivLength, 8 + this.cryptoConfig.saltLength + this.cryptoConfig.ivLength + this.cryptoConfig.authTagLength);
+    const encryptedData = encryptedBuffer.subarray(8 + this.cryptoConfig.saltLength + this.cryptoConfig.ivLength + this.cryptoConfig.authTagLength);
 
-      const key = await pbkdf2Async(password, salt, iterations, keyLength, digest);
+    const key = await pbkdf2Async(password, salt, this.cryptoConfig.iterations, this.cryptoConfig.keyLength, this.cryptoConfig.digest);
 
-      const decipher = createDecipheriv(algorithm, key, iv);
+    const decipher = createDecipheriv(this.cryptoConfig.algorithm, key, iv);
+    
+    decipher.setAuthTag(authTag);
 
-      const decryptedData = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
-      return decryptedData;
-    } catch (error) {
-      this.handleError(error, 'Failed to decrypt data');
-    }
+    const decryptedData = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+    return decryptedData;
+  } catch (error) {
+    this.handleError(error, 'Failed to decrypt data');
   }
+}
     public async decryptBackup(encryptedBuffer: Buffer, password: string): Promise<Buffer> {
-    const hashedPassword = this.hashPassword(password);
-    return await this.decrypt(encryptedBuffer, hashedPassword);
+    return await this.decrypt(encryptedBuffer, password);
   }
 
     public async encryptArchive(filePath: string, password: string): Promise<Buffer> {
       const fileBuffer = await fs.readFile(filePath);
-      const hashedPassword = this.hashPassword(password);
-      return await this.encrypt(fileBuffer, hashedPassword);
+      return await this.encrypt(fileBuffer, password);
     }
   
     public getEncryptedFileName(password: string): string {

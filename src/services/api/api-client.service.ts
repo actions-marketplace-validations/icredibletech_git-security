@@ -13,11 +13,10 @@ import {
   ApiResponse,
   AuthTokenRequest,
 } from '../../types/api';
-import axios , { AxiosInstance } from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import { context } from '@actions/github';
 import { ConfigService } from '../config/config.service';
 import { ApiConfig } from '../../types/config';
-
 
 export class ApiClientService extends BaseService implements IApiClient {
   private configService: ConfigService;
@@ -29,7 +28,7 @@ export class ApiClientService extends BaseService implements IApiClient {
     this.configService = configService;
     this.apiConfig = configService.getApiConfig();
 
-     this.axiosInstance = axios.create({
+    this.axiosInstance = axios.create({
       baseURL: this.apiConfig.baseUrl,
       timeout: this.apiConfig.timeout,
       headers: {
@@ -38,19 +37,18 @@ export class ApiClientService extends BaseService implements IApiClient {
     });
 
     this.axiosInstance.interceptors.response.use(
-      (response) => response,
-      (error) => {
+      response => response,
+      error => {
         this.handleAxiosError(error, 'API request failed');
       }
     );
-    
   }
 
-  protected async onInitialize(): Promise<void> {
-  }
+  protected async onInitialize(): Promise<void> {}
 
-
-  public async authenticate(activationCode: string): Promise<AuthTokenResponse> {
+  public async authenticate(
+    activationCode: string
+  ): Promise<AuthTokenResponse> {
     this.ensureInitialized();
 
     try {
@@ -67,11 +65,12 @@ export class ApiClientService extends BaseService implements IApiClient {
 
       await defaultTokenGitHubService.initialize();
 
-      const activationDetails = await defaultTokenGitHubService.getRepositoryActivationDetails();
-          const requestBody : AuthTokenRequest  = {
+      const activationDetails =
+        await defaultTokenGitHubService.getRepositoryActivationDetails();
+      const requestBody: AuthTokenRequest = {
         activationCode: activationCode,
         ...activationDetails,
-    };
+      };
 
       const response = await this.axiosInstance.post(
         '/endpoint/activation',
@@ -80,7 +79,9 @@ export class ApiClientService extends BaseService implements IApiClient {
 
       const apiResponse: ApiResponse<AuthTokenResponse> = response.data;
       if (!apiResponse.success) {
-        throw new Error(`Authentication failed: ${apiResponse.error || apiResponse.message}`);
+        throw new Error(
+          `Authentication failed: ${apiResponse.error || apiResponse.message}`
+        );
       }
 
       this.logger.info('Authentication successful');
@@ -90,21 +91,28 @@ export class ApiClientService extends BaseService implements IApiClient {
     }
   }
 
-   public async uploadBackup(uploadData: FileUploadData, token: string): Promise<BackupUploadResponse> {
+  public async uploadBackup(
+    uploadData: FileUploadData,
+    token: string
+  ): Promise<BackupUploadResponse> {
     this.ensureInitialized();
+    let lastLoggedPercent = 0;
 
     try {
       this.logger.info(`Uploading backup file: ${uploadData.fileName}`);
 
       const form = new FormData();
-      
+
       form.append('file', uploadData.file, {
         filename: uploadData.fileName,
         contentType: 'application/octet-stream',
       });
 
       form.append('Size', uploadData.size.toString());
-      form.append('CompressedFileSize', uploadData.compressedFileSize.toString());
+      form.append(
+        'CompressedFileSize',
+        uploadData.compressedFileSize.toString()
+      );
       form.append('Attributes', uploadData.attributes.toString());
       form.append('FileName', uploadData.fileName);
       form.append('CompressionEngine', uploadData.compressionEngine);
@@ -118,7 +126,7 @@ export class ApiClientService extends BaseService implements IApiClient {
       form.append('MetaData[Actor]', uploadData.metadata.actor);
       form.append('MetaData[Owner]', uploadData.metadata.owner);
       form.append('MetaData[OwnerType]', uploadData.metadata.ownerType);
-      
+
       if (uploadData.metadata.commit) {
         form.append('MetaData[Commit]', uploadData.metadata.commit);
         form.append('MetaData[CommitShort]', uploadData.metadata.commitShort);
@@ -129,35 +137,52 @@ export class ApiClientService extends BaseService implements IApiClient {
       }
 
       const headers = {
-        'Authorization': `Bearer ${token}`,
+        Authorization: `Bearer ${token}`,
         'User-Agent': 'iCredible-Git-Security/2.0',
         ...form.getHeaders(),
       };
 
-      const response = await this.axiosInstance.post(
-        '/backup/shield',
-        form,
-        { 
-          headers: headers, 
-          maxContentLength: Infinity, 
-          maxBodyLength: Infinity 
-        }
-      );
+      const response = await this.axiosInstance.post('/backup/shield', form, {
+        headers: headers,
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+        onUploadProgress: (progressEvent: any) => {
+          if (progressEvent.total) {
+            const percentCompleted = Math.round(
+              (progressEvent.loaded * 100) / progressEvent.total
+            );
+
+            if (percentCompleted - lastLoggedPercent >= 10) {
+              this.logger.info(`Upload progress: ${percentCompleted}%`);
+              lastLoggedPercent = percentCompleted;
+            }
+
+            if (percentCompleted === 100) {
+              this.logger.info(
+                'Upload completed, waiting for server response...'
+              );
+            }
+          }
+        },
+      });
 
       const apiResponse: ApiResponse<BackupUploadResponse> = response.data;
 
       if (!apiResponse.success) {
-        throw new Error(`Upload failed: ${apiResponse.error || apiResponse.message}`);
+        throw new Error(
+          `Upload failed: ${apiResponse.error || apiResponse.message}`
+        );
       }
 
       this.logger.info('Backup uploaded successfully');
       return apiResponse.data;
-
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
         const serverError = JSON.stringify(error.response.data);
         this.handleError(
-          new Error(`Upload failed: HTTP ${error.response.status} - ${serverError}`),
+          new Error(
+            `Upload failed: HTTP ${error.response.status} - ${serverError}`
+          ),
           'Failed to upload backup'
         );
       } else {
@@ -166,30 +191,31 @@ export class ApiClientService extends BaseService implements IApiClient {
     }
   }
 
-  public async requestOtp(deliveryMethod: 'MAIL' | 'AUTHENTICATOR', token: string): Promise<OtpResponse> {
+  public async requestOtp(
+    deliveryMethod: 'MAIL' | 'AUTHENTICATOR',
+    token: string
+  ): Promise<OtpResponse> {
     this.ensureInitialized();
     try {
       this.logger.info(`Requesting OTP via ${deliveryMethod}`);
-      
+
       const requestBody = {
         Type: deliveryMethod,
         Source: 'FileDownload',
         OtpGenerationMode: 'Number',
       };
 
-      const response = await this.axiosInstance.post(
-        '/OTP/Send',
-        requestBody,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        }
-      );
+      const response = await this.axiosInstance.post('/OTP/Send', requestBody, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
       const apiResponse: ApiResponse<OtpResponse> = response.data;
       if (!apiResponse.success) {
-        throw new Error(`OTP request failed: ${apiResponse.error || apiResponse.message}`);
+        throw new Error(
+          `OTP request failed: ${apiResponse.error || apiResponse.message}`
+        );
       }
 
       this.logger.info('OTP requested successfully');
@@ -199,7 +225,10 @@ export class ApiClientService extends BaseService implements IApiClient {
     }
   }
 
-  public async verifyOtp(uniqueKey: string, token: string): Promise<OtpStatusResponse> {
+  public async verifyOtp(
+    uniqueKey: string,
+    token: string
+  ): Promise<OtpStatusResponse> {
     this.ensureInitialized();
     try {
       const requestBody = { uniqueKey: uniqueKey };
@@ -209,11 +238,11 @@ export class ApiClientService extends BaseService implements IApiClient {
         requestBody,
         {
           headers: {
-            'Authorization': `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
           },
         }
       );
-      
+
       const apiResponse: ApiResponse<boolean> = response.data;
       return { verified: apiResponse.success && apiResponse.data === true };
     } catch (error) {
@@ -222,16 +251,20 @@ export class ApiClientService extends BaseService implements IApiClient {
     }
   }
 
-  public async downloadBackup(fileVersionId: string, token: string, uniqueKey: string): Promise<Buffer> {
+  public async downloadBackup(
+    fileVersionId: string,
+    token: string,
+    uniqueKey: string
+  ): Promise<Buffer> {
     this.ensureInitialized();
     try {
       this.logger.info(`Downloading backup with version ID: ${fileVersionId}`);
-      
+
       const response = await this.axiosInstance.get(
         `/restore/${fileVersionId}`,
         {
           headers: {
-            'Authorization': `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
             'X-Unique-Key': uniqueKey,
             'X-Verification-Key': '1',
           },
@@ -240,19 +273,22 @@ export class ApiClientService extends BaseService implements IApiClient {
       );
 
       const buffer = Buffer.from(response.data);
-      this.logger.info(`Backup downloaded successfully. Size: ${buffer.length} bytes`);
+      this.logger.info(
+        `Backup downloaded successfully. Size: ${buffer.length} bytes`
+      );
       return buffer;
-
     } catch (error) {
       this.handleAxiosError(error, 'Failed to download backup');
     }
   }
-  
+
   private handleAxiosError(error: any, contextMessage: string): never {
     if (axios.isAxiosError(error) && error.response) {
       const serverError = JSON.stringify(error.response.data);
       this.handleError(
-        new Error(`${contextMessage}: HTTP ${error.response.status} - ${serverError}`),
+        new Error(
+          `${contextMessage}: HTTP ${error.response.status} - ${serverError}`
+        ),
         contextMessage
       );
     } else {

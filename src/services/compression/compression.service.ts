@@ -1,32 +1,93 @@
-import { createReadStream, createWriteStream, promises as fs, Stats } from 'fs';
+import { promises as fs } from 'fs';
 import { join } from 'path';
 import * as tar from 'tar';
-import { pipeline } from 'stream/promises';
 import { BaseService } from '../base/base-service';
 import { ICompressionService, ILogger } from '../base/interfaces';
 import { exec } from '@actions/exec';
 
-export class CompressionService extends BaseService implements ICompressionService {
+export class CompressionService
+  extends BaseService
+  implements ICompressionService
+{
+  private zstdInstalled: boolean = false;
+
   constructor(logger: ILogger) {
     super(logger);
   }
 
   protected async onInitialize(): Promise<void> {
     try {
+      // Check if tar is available
       if (typeof tar.create !== 'function') {
         throw new Error('Tar create function not available');
       }
+
+      // Install zstd if not already installed
+      await this.ensureZstdInstalled();
     } catch (error) {
-      throw new Error('Tar functionality not available');
+      throw new Error(
+        'Failed to initialize compression service: ' + String(error)
+      );
+    }
+  }
+  // TODO: Add the zstd tool to the build without requiring an additional download within the action
+  private async ensureZstdInstalled(): Promise<void> {
+    if (this.zstdInstalled) {
+      return;
+    }
+
+    try {
+      // Check if zstd is already available
+      const checkResult = await exec('zstd', ['--version'], {
+        ignoreReturnCode: true,
+        silent: true,
+      });
+
+      if (checkResult === 0) {
+        this.logger.info('zstd is already available in the system');
+        this.zstdInstalled = true;
+        return;
+      }
+    } catch {
+      // zstd not found, need to install
+    }
+
+    try {
+      this.logger.info('Installing zstd...');
+      try {
+        await exec('npm', ['install', '-g', 'zstd'], { silent: true });
+        this.logger.info('zstd installed successfully via npm');
+        this.zstdInstalled = true;
+        return;
+      } catch {}
+
+      // Final check if zstd is available
+      const finalCheck = await exec('zstd', ['--version'], {
+        ignoreReturnCode: true,
+        silent: true,
+      });
+
+      if (finalCheck !== 0) {
+        throw new Error('Failed to install zstd');
+      }
+
+      this.zstdInstalled = true;
+    } catch (error) {
+      throw new Error('Failed to ensure zstd installation: ' + String(error));
     }
   }
 
-  public async createTarArchive(sourceDir: string, outputPath: string): Promise<number> {
+  public async createTarArchive(
+    sourceDir: string,
+    outputPath: string
+  ): Promise<number> {
     this.ensureInitialized();
 
     try {
-      this.logger.info(`Creating tar archive from ${sourceDir} to ${outputPath}`);
-      
+      this.logger.info(
+        `Creating tar archive from ${sourceDir} to ${outputPath}`
+      );
+
       // Verify source directory exists
       const sourceStat = await fs.stat(sourceDir);
       if (!sourceStat.isDirectory()) {
@@ -47,94 +108,120 @@ export class CompressionService extends BaseService implements ICompressionServi
       // Get file size
       const stat = await fs.stat(outputPath);
       const fileSize = stat.size;
-      
-      this.logger.info(`Tar archive created successfully. Size: ${fileSize} bytes`);
+
+      this.logger.info(
+        `Tar archive created successfully. Size: ${fileSize} bytes`
+      );
       return fileSize;
     } catch (error) {
       this.handleError(error, 'Failed to create tar archive');
     }
   }
 
-    public async compressWithZstd(inputPath: string, outputPath: string): Promise<number> {
+  public async compressWithZstd(
+    inputPath: string,
+    outputPath: string
+  ): Promise<number> {
     this.ensureInitialized();
+
     try {
       this.logger.info(`Compressing ${inputPath} with zstd to ${outputPath}`);
-      
-      // Düzeltilmiş loader fonksiyonu artık doğru nesneyi döndürecek
-      const zstdSimple = await this.loadZstdModule();
-      
-      const inputBuffer = await fs.readFile(inputPath);
-      
-      const compressedBuffer = zstdSimple.compress(inputBuffer, 10);
-      
-      await fs.writeFile(outputPath, compressedBuffer);
-      
-      const compressedSize = compressedBuffer.length;
-      this.logger.info(`Zstd compression completed. Compressed size: ${compressedSize} bytes`);
-      
+      await this.ensureZstdInstalled();
+
+      const inputStat = await fs.stat(inputPath);
+      const inputSize = inputStat.size;
+      this.logger.info(`Input file size: ${inputSize} bytes`);
+
+      const args = [
+        '-10', // Compression level (1-19, default is 3)
+        '-T0', // Use all CPU cores
+        '--long', // Enable long distance matching
+        '-f', // Force overwrite output
+        inputPath, // Input file
+        '-o', // Output flag
+        outputPath, // Output file
+      ];
+
+      // if (inputSize > 100 * 1024 * 1024) {
+      //   this.logger.info("Large file detected, using optimized settings");
+      //   args[0] = "-12"; // Higher compression for large files
+      // }
+
+      const exitCode = await exec('zstd', args);
+
+      if (exitCode !== 0) {
+        throw new Error(`zstd compression failed with exit code ${exitCode}`);
+      }
+
+      const compressedStat = await fs.stat(outputPath);
+      const compressedSize = compressedStat.size;
+
+      const compressionRatio = ((1 - compressedSize / inputSize) * 100).toFixed(
+        2
+      );
+      this.logger.info(
+        `Zstd compression completed. Compressed size: ${compressedSize} bytes (${compressionRatio}% reduction)`
+      );
+
       return compressedSize;
     } catch (error) {
       this.handleError(error, 'Failed to compress with zstd');
     }
   }
 
-  public async decompressZstd(inputPath: string, outputPath: string): Promise<void> {
+  public async decompressZstd(
+    inputPath: string,
+    outputPath: string
+  ): Promise<void> {
     this.ensureInitialized();
 
     try {
       this.logger.info(`Decompressing ${inputPath} with zstd to ${outputPath}`);
-      
-      const zstd = await this.loadZstdModule();
-      
-      // Read compressed file
-      const compressedBuffer = await fs.readFile(inputPath);
-      
-      // Decompress
-      const decompressedBuffer = zstd.decompress(compressedBuffer);
-      
-      // Write decompressed file
-      await fs.writeFile(outputPath, decompressedBuffer);
-      
+
+      await this.ensureZstdInstalled();
+
+      const args = [
+        '-d', // Decompress flag
+        '-f', // Force overwrite
+        inputPath, // Input file
+        '-o', // Output flag
+        outputPath, // Output file
+      ];
+
+      const exitCode = await exec('zstd', args);
+
+      if (exitCode !== 0) {
+        throw new Error(`zstd decompression failed with exit code ${exitCode}`);
+      }
+
       this.logger.info(`Zstd decompression completed`);
     } catch (error) {
       this.handleError(error, 'Failed to decompress with zstd');
     }
   }
 
-  public async extractTarArchive(tarPath: string, extractDir: string): Promise<void> {
+  public async extractTarArchive(
+    tarPath: string,
+    extractDir: string
+  ): Promise<void> {
     this.ensureInitialized();
 
     try {
       this.logger.info(`Extracting tar archive ${tarPath} to ${extractDir}`);
-      
+
       // Ensure extract directory exists
       await fs.mkdir(extractDir, { recursive: true });
-      
+
       // Extract tar archive
       await tar.extract({
         file: tarPath,
         cwd: extractDir,
         strip: 0,
       });
-      
+
       this.logger.info(`Tar archive extracted successfully`);
     } catch (error) {
       this.handleError(error, 'Failed to extract tar archive');
-    }
-  }
-
-  // Stream-based compression for large files to avoid memory issues
-  public async compressStreamWithZstd(inputPath: string, outputPath: string): Promise<number> {
-    this.ensureInitialized();
-
-    try {
-      this.logger.info(`Stream compressing ${inputPath} with zstd to ${outputPath}`);
-      
-      // For very large files, we might need to implement streaming compression
-      // For now, fall back to buffer-based compression
-      return await this.compressWithZstd(inputPath, outputPath);
-    } catch (error) {
-      this.handleError(error, 'Failed to stream compress with zstd');
     }
   }
 
@@ -147,42 +234,23 @@ export class CompressionService extends BaseService implements ICompressionServi
       if (stat.isFile()) {
         return stat.size;
       }
-      
+
       if (stat.isDirectory()) {
         const files = await fs.readdir(dirPath);
         let totalSize = 0;
-        
+
         for (const file of files) {
           const filePath = join(dirPath, file);
           totalSize += await this.getDirectorySize(filePath);
         }
-        
+
         return totalSize;
       }
-      
+
       return 0;
     } catch (error) {
       this.logger.warn(`Could not get size for ${dirPath}: ${String(error)}`);
       return 0;
     }
-  }
-
-  private async loadZstdModule(): Promise<any> {
-    return new Promise((resolve, reject) => {
-      try {
-        // require('zstd-codec') dinamik olarak ZstdCodec'i getirir
-        const { ZstdCodec } = require('zstd-codec');
-        
-        // Kütüphanenin asenkron başlatmasını yönet
-        ZstdCodec.run((zstd: { Simple: new () => any; }) => {
-          const simple = new zstd.Simple();
-          // Promise'i 'simple' nesnesi ile başarıyla tamamla
-          resolve(simple);
-        });
-      } catch (error) {
-        // Hata durumunda Promise'i reddet
-        reject(new Error('zstd-codec module not available. Please install it with: npm install zstd-codec'));
-      }
-    });
   }
 }
